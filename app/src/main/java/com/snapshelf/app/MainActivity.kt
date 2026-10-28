@@ -3,7 +3,6 @@ package com.snapshelf.app
 import android.content.Context
 import android.net.Uri
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -24,6 +23,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -38,7 +38,7 @@ private val Ink = Color(0xFF0B0D10)
 private val Panel = Color(0xFF15191F)
 private val Blue = Color(0xFF73A7FF)
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     private var returningFromBackground = false
     private val vm by viewModels<LibraryViewModel> {
         object : ViewModelProvider.Factory {
