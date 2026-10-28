@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -39,6 +40,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.compose.*
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import coil.request.CachePolicy
+import coil.size.Precision
+import coil.size.Size
 import com.snapshelf.app.data.*
 import kotlinx.coroutines.launch
 import java.io.File
@@ -241,7 +246,8 @@ private fun ViewerScreen(vm: LibraryViewModel, id: String, back: () -> Unit, aut
     Box(Modifier.fillMaxSize().background(Black)) {
         image?.let { current ->
             AsyncImage(
-                model = tempPath ?: current.path.takeIf { !current.isProtected },
+                model = tempPath?.let { originalImageRequest(LocalContext.current, it) }
+                    ?: current.path.takeIf { !current.isProtected }?.let { originalImageRequest(LocalContext.current, it) },
                 contentDescription = current.displayName,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize().pointerInput(current.id) {
@@ -342,7 +348,7 @@ private fun ScreenshotCard(image: LibraryImage, open: (String) -> Unit, actions:
     Surface(onClick = { open(image.id) }, color = Navy, shape = RoundedCornerShape(20.dp), border = BorderStroke(1.dp, Slate), modifier = Modifier.graphicsLayer(alpha = alpha)) {
         Column {
             Box(Modifier.fillMaxWidth().height(170.dp).background(Color(0xFF101D2A))) {
-                AsyncImage(model = image.path.takeIf { !image.isProtected }, contentDescription = image.displayName, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                AsyncImage(model = image.thumbnailPath?.takeIf { !image.isProtected }?.let { thumbnailImageRequest(LocalContext.current, it) }, contentDescription = image.displayName, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                 if (image.isProtected) Text("▣", color = Cyan, modifier = Modifier.align(Alignment.Center), style = MaterialTheme.typography.headlineMedium)
                 if (image.isProtected) Text("PROTECTED", color = Cyan, style = MaterialTheme.typography.labelSmall, modifier = Modifier.align(Alignment.TopStart).padding(10.dp))
             }
@@ -483,3 +489,23 @@ private fun DialogHost(state: DialogState?, vm: LibraryViewModel, setState: (Dia
 @Composable private fun ActionDialog(title: String, rename: () -> Unit, delete: () -> Unit, cancel: () -> Unit, extra: (() -> Unit)? = null) { AlertDialog(onDismissRequest = cancel, containerColor = Navy, titleContentColor = White, title = { Text(title) }, text = { Column { TextButton(onClick = rename) { Text("Rename", color = White) }; extra?.let { TextButton(onClick = it) { Text("Protect with vault", color = Cyan) } }; TextButton(onClick = delete) { Text("Delete", color = ErrorRed) } } }, confirmButton = {}, dismissButton = { TextButton(onClick = cancel) { Text("Cancel", color = Steel) } }) }
 @Composable private fun ConfirmDialog(title: String, body: String, confirm: () -> Unit, cancel: () -> Unit) { AlertDialog(onDismissRequest = cancel, containerColor = Navy, titleContentColor = White, textContentColor = Steel, title = { Text(title) }, text = { Text(body) }, confirmButton = { TextButton(confirm) { Text("Delete", color = ErrorRed) } }, dismissButton = { TextButton(cancel) { Text("Cancel", color = Steel) } }) }
 @Composable private fun SnapShelfTheme(content: @Composable () -> Unit) { MaterialTheme(colorScheme = darkColorScheme(primary = Cyan, background = Black, surface = Navy, onBackground = White, onSurface = White), typography = Typography(), content = content) }
+
+private fun thumbnailImageRequest(context: Context, path: String) = ImageRequest.Builder(context)
+    .data(path)
+    .size(512)
+    .precision(Precision.INEXACT)
+    .memoryCacheKey("thumbnail:$path")
+    .diskCacheKey("thumbnail:$path")
+    .crossfade(180)
+    .build()
+
+private fun originalImageRequest(context: Context, path: String) = ImageRequest.Builder(context)
+    .data(path)
+    .size(Size.ORIGINAL)
+    .precision(Precision.EXACT)
+    .allowHardware(false)
+    .memoryCachePolicy(CachePolicy.DISABLED)
+    .diskCachePolicy(CachePolicy.DISABLED)
+    .memoryCacheKey("original:$path")
+    .diskCacheKey("original:$path")
+    .build()

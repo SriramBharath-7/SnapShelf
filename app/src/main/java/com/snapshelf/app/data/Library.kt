@@ -7,6 +7,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import java.io.File
 import java.util.UUID
 
@@ -38,6 +40,7 @@ data class LibraryImage(
     @PrimaryKey val id: String = UUID.randomUUID().toString(),
     val folderId: String,
     val path: String,
+    val thumbnailPath: String?,
     val displayName: String,
     val orderIndex: Int,
     val importedAt: Long = System.currentTimeMillis(),
@@ -68,9 +71,11 @@ interface LibraryDao {
     @Query("UPDATE images SET readingPosition = :position WHERE id = :id") suspend fun updatePosition(id: String, position: Float)
     @Query("UPDATE images SET orderIndex = :orderIndex WHERE id = :id") suspend fun updateOrder(id: String, orderIndex: Int)
     @Query("UPDATE images SET isProtected = :isProtected, path = :path WHERE id = :id") suspend fun updateProtection(id: String, isProtected: Boolean, path: String)
+    @Query("UPDATE images SET thumbnailPath = :thumbnailPath WHERE id = :id") suspend fun updateThumbnail(id: String, thumbnailPath: String)
+    @Query("UPDATE images SET isProtected = :isProtected, path = :path, thumbnailPath = :thumbnailPath WHERE id = :id") suspend fun updateProtectionPaths(id: String, isProtected: Boolean, path: String, thumbnailPath: String?)
 }
 
-@Database(entities = [Subject::class, Folder::class, LibraryImage::class], version = 2, exportSchema = false)
+@Database(entities = [Subject::class, Folder::class, LibraryImage::class], version = 3, exportSchema = false)
 abstract class LibraryDatabase : RoomDatabase() {
     abstract fun dao(): LibraryDao
     companion object {
@@ -78,6 +83,10 @@ abstract class LibraryDatabase : RoomDatabase() {
             .addMigrations(object : Migration(1, 2) {
                 override fun migrate(db: SupportSQLiteDatabase) {
                     db.execSQL("ALTER TABLE images ADD COLUMN isProtected INTEGER NOT NULL DEFAULT 0")
+                }
+            }, object : Migration(2, 3) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    db.execSQL("ALTER TABLE images ADD COLUMN thumbnailPath TEXT")
                 }
             }).build()
     }
@@ -103,10 +112,17 @@ class LibraryRepository(private val context: Context, private val dao: LibraryDa
     suspend fun deleteSubject(subject: Subject) {
         val folderIds = dao.folders(subject.id).first()
         dao.deleteSubject(subject.id)
-        folderIds.forEach { File(context.filesDir, "library/${it.id}").deleteRecursively() }
+        folderIds.forEach { folder ->
+            dao.imageList(folder.id).forEach { image -> deleteFiles(image) }
+            File(context.filesDir, "library/${folder.id}").deleteRecursively()
+        }
     }
-    suspend fun deleteFolder(folder: Folder) { dao.deleteFolder(folder.id); File(context.filesDir, "library/${folder.id}").deleteRecursively() }
-    suspend fun deleteImage(image: LibraryImage) { dao.deleteImage(image.id); File(image.path).delete() }
+    suspend fun deleteFolder(folder: Folder) {
+        dao.imageList(folder.id).forEach { image -> deleteFiles(image) }
+        dao.deleteFolder(folder.id)
+        File(context.filesDir, "library/${folder.id}").deleteRecursively()
+    }
+    suspend fun deleteImage(image: LibraryImage) { dao.deleteImage(image.id); deleteFiles(image) }
     suspend fun updatePosition(id: String, position: Float) = dao.updatePosition(id, position.coerceIn(0f, 1f))
     suspend fun reorder(folderId: String, orderedIds: List<String>) {
         orderedIds.forEachIndexed { index, imageId -> dao.updateOrder(imageId, index) }
@@ -115,16 +131,20 @@ class LibraryRepository(private val context: Context, private val dao: LibraryDa
         if (image.isProtected) return image
         val source = File(image.path)
         val encrypted = VaultManager(File(context.filesDir, "vault")).encrypt(source, image.id)
+        val encryptedThumbnail = image.thumbnailPath?.let { VaultManager(File(context.filesDir, "vault")).encrypt(File(it), "${image.id}_thumb") }
         return try {
-            dao.updateProtection(image.id, true, encrypted.absolutePath)
+            dao.updateProtectionPaths(image.id, true, encrypted.absolutePath, encryptedThumbnail?.absolutePath)
             if (!source.delete() && source.exists()) {
-                dao.updateProtection(image.id, false, source.absolutePath)
+                dao.updateProtectionPaths(image.id, false, source.absolutePath, image.thumbnailPath)
                 encrypted.delete()
+                encryptedThumbnail?.delete()
                 error("Could not remove the unencrypted source")
             }
+            image.thumbnailPath?.let { thumbnail -> if (!File(thumbnail).delete() && File(thumbnail).exists()) error("Could not remove the unencrypted thumbnail") }
             image.copy(isProtected = true, path = encrypted.absolutePath)
         } catch (error: Exception) {
             encrypted.delete()
+            encryptedThumbnail?.delete()
             throw IllegalStateException("Could not register protected screenshot", error)
         }
     }
@@ -138,21 +158,49 @@ class LibraryRepository(private val context: Context, private val dao: LibraryDa
         val destination = File(context.filesDir, "library/${folder.id}").apply { mkdirs() }
         val existingCount = dao.imageList(folder.id).size
         val pending = mutableListOf<LibraryImage>()
-        uris.distinct().forEachIndexed { index, uri ->
+        try {
+            uris.distinct().forEachIndexed { index, uri ->
             val name = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "Screenshot_${index + 1}.png"
             val target = File(destination, "${UUID.randomUUID()}_${name.replace(Regex("[^A-Za-z0-9._-]"), "_")}")
-            try {
                 context.contentResolver.openInputStream(uri)?.use { input -> target.outputStream().use(input::copyTo) }
                     ?: error("Unable to read $name")
-                pending += LibraryImage(folderId = folder.id, path = target.absolutePath, displayName = name, orderIndex = existingCount + index)
-            } catch (error: Exception) {
-                target.delete()
-                throw IllegalStateException("Could not import $name", error)
+                val thumbnail = createThumbnail(target, destination)
+                pending += LibraryImage(folderId = folder.id, path = target.absolutePath, thumbnailPath = thumbnail.absolutePath, displayName = name, orderIndex = existingCount + index)
             }
+        } catch (error: Exception) {
+            pending.forEach { deleteFiles(it) }
+            throw IllegalStateException("Could not import selected screenshots", error)
         }
         if (pending.isNotEmpty()) dao.insertImages(pending)
     }
     suspend fun reconcileStorage() {
-        dao.allImages().filter { !File(it.path).exists() }.forEach { dao.deleteImage(it.id) }
+        dao.allImages().forEach { image ->
+            if (!File(image.path).exists()) {
+                dao.deleteImage(image.id)
+                return@forEach
+            }
+            if (!image.isProtected && image.thumbnailPath == null) {
+                runCatching { dao.updateThumbnail(image.id, createThumbnail(File(image.path), File(context.filesDir, "library/${image.folderId}")).absolutePath) }
+            }
+        }
+    }
+
+    private fun deleteFiles(image: LibraryImage) {
+        File(image.path).delete()
+        image.thumbnailPath?.let { File(it).delete() }
+    }
+
+    private fun createThumbnail(source: File, directory: File): File {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(source.absolutePath, bounds)
+        require(bounds.outWidth > 0 && bounds.outHeight > 0) { "Unable to decode ${source.name}" }
+        var sample = 1
+        while (bounds.outWidth / sample > 512 || bounds.outHeight / sample > 512) sample *= 2
+        val options = BitmapFactory.Options().apply { inSampleSize = sample; inPreferredConfig = Bitmap.Config.RGB_565 }
+        val bitmap = BitmapFactory.decodeFile(source.absolutePath, options) ?: error("Unable to create thumbnail for ${source.name}")
+        return File(directory, "${source.nameWithoutExtension}_thumb.webp").also { thumbnail ->
+            thumbnail.outputStream().use { output -> require(bitmap.compress(Bitmap.CompressFormat.WEBP, 82, output)) }
+            bitmap.recycle()
+        }
     }
 }
