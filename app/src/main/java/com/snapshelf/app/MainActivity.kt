@@ -16,6 +16,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -45,6 +47,8 @@ import coil.request.ImageRequest
 import coil.size.Precision
 import com.snapshelf.app.data.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 
 private val Black = Color(0xFF000000)
@@ -114,12 +118,12 @@ class LibraryViewModel(val context: Context, private val repo: LibraryRepository
     fun deleteSubject(s: Subject) = viewModelScope.launch { repo.deleteSubject(s) }
     fun deleteFolder(f: Folder) = viewModelScope.launch { repo.deleteFolder(f) }
     fun deleteImage(i: LibraryImage) = viewModelScope.launch { repo.deleteImage(i) }
-    fun importImages(f: Folder, uris: List<Uri>) = viewModelScope.launch { repo.importImages(f, uris) }
+    fun importImages(f: Folder, uris: List<Uri>) = viewModelScope.launch(Dispatchers.IO) { repo.importImages(f, uris) }
     fun reorder(folderId: String, ids: List<String>) = viewModelScope.launch { repo.reorder(folderId, ids) }
     fun savePosition(id: String, position: Float) = viewModelScope.launch { repo.updatePosition(id, position) }
     fun protect(i: LibraryImage) = viewModelScope.launch { repo.protect(i) }
     fun decryptForViewing(i: LibraryImage) = repo.decryptForViewing(i)
-    init { viewModelScope.launch { repo.reconcileStorage() } }
+    init { viewModelScope.launch(Dispatchers.IO) { repo.reconcileStorage() } }
     suspend fun collection(id: String) = repo.collectionFor(id)
     suspend fun folder(id: String) = repo.folder(id)
 }
@@ -163,7 +167,7 @@ private fun HomeScreen(vm: LibraryViewModel, open: (Subject) -> Unit, openVault:
         }
         Spacer(Modifier.height(28.dp))
         SectionHeader("Your subjects", "${subjects.size} ${if (subjects.size == 1) "subject" else "subjects"}")
-        if (subjects.isEmpty()) EmptyState("Start your library", "Create a subject for a course, project, or reference set.")
+        if (subjects.isEmpty()) EmptyState("Start your library", "Create a subject for a course, project, or reference set.", R.drawable.empty_library)
         LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 24.dp), modifier = Modifier.weight(1f)) {
             items(subjects, key = { it.id }) { subject -> SubjectCard(subject, open) { dialog = DialogState.SubjectActions(subject) } }
         }
@@ -444,7 +448,10 @@ private fun ScreenshotCard(image: LibraryImage, open: (String) -> Unit, actions:
 }
 
 @Composable private fun PrimaryButton(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Button(onClick = onClick, modifier = modifier, shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Black), contentPadding = PaddingValues(vertical = 14.dp)) { Text(label, fontWeight = FontWeight.Bold) }
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed) 0.97f else 1f, tween(130), label = "buttonPress")
+    Button(onClick = onClick, interactionSource = interaction, modifier = modifier.graphicsLayer(scaleX = scale, scaleY = scale), shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = Cyan, contentColor = Black), contentPadding = PaddingValues(vertical = 14.dp)) { Text(label, fontWeight = FontWeight.Bold) }
 }
 
 @Composable private fun SecondaryButton(label: String, onClick: () -> Unit) {
@@ -461,9 +468,13 @@ private fun ScreenshotCard(image: LibraryImage, open: (String) -> Unit, actions:
 
 @Composable private fun MoreButton(onClick: () -> Unit) { Text("•••", color = Steel, modifier = Modifier.clickable { onClick() }.padding(6.dp), style = MaterialTheme.typography.labelLarge) }
 
-@Composable private fun EmptyState(title: String, body: String) {
+@Composable private fun EmptyState(title: String, body: String, illustration: Int? = null) {
     Column(Modifier.fillMaxWidth().padding(vertical = 54.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(Modifier.size(64.dp).background(Navy, RoundedCornerShape(20.dp)), contentAlignment = Alignment.Center) { Text("＋", color = Cyan, style = MaterialTheme.typography.headlineMedium) }
+        if (illustration != null) {
+            Image(painter = androidx.compose.ui.res.painterResource(illustration), contentDescription = null, modifier = Modifier.size(190.dp), contentScale = ContentScale.Fit)
+        } else {
+            Box(Modifier.size(64.dp).background(Navy, RoundedCornerShape(20.dp)), contentAlignment = Alignment.Center) { Text("＋", color = Cyan, style = MaterialTheme.typography.headlineMedium) }
+        }
         Spacer(Modifier.height(16.dp)); Text(title, color = White, fontWeight = FontWeight.Bold); Text(body, color = Steel, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
     }
 }

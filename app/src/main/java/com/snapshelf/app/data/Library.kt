@@ -182,7 +182,12 @@ class LibraryRepository(private val context: Context, private val dao: LibraryDa
             pending.forEach { deleteFiles(it) }
             throw IllegalStateException("Could not import selected screenshots", error)
         }
-        if (pending.isNotEmpty()) dao.insertImages(pending)
+        try {
+            if (pending.isNotEmpty()) dao.insertImages(pending)
+        } catch (error: Exception) {
+            pending.forEach { deleteFiles(it) }
+            throw IllegalStateException("Could not save imported screenshots", error)
+        }
     }
     suspend fun reconcileStorage() {
         dao.allImages().forEach { image ->
@@ -223,8 +228,16 @@ class LibraryRepository(private val context: Context, private val dao: LibraryDa
         while (bounds.outWidth / sample > 512 || bounds.outHeight / sample > 512) sample *= 2
         val options = BitmapFactory.Options().apply { inSampleSize = sample; inPreferredConfig = Bitmap.Config.RGB_565 }
         val bitmap = BitmapFactory.decodeFile(source.absolutePath, options) ?: error("Unable to create thumbnail for ${source.name}")
-        return File(directory, "${source.nameWithoutExtension}_thumb.webp").also { thumbnail ->
-            thumbnail.outputStream().use { output -> require(bitmap.compress(Bitmap.CompressFormat.WEBP, 82, output)) }
+        return try {
+            File(directory.apply { mkdirs() }, "${source.nameWithoutExtension}_thumb.webp").also { thumbnail ->
+                try {
+                    thumbnail.outputStream().use { output -> require(bitmap.compress(Bitmap.CompressFormat.WEBP, 82, output)) }
+                } catch (error: Exception) {
+                    thumbnail.delete()
+                    throw error
+                }
+            }
+        } finally {
             bitmap.recycle()
         }
     }

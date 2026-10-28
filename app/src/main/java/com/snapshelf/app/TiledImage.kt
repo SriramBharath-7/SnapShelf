@@ -7,6 +7,7 @@ import android.graphics.Rect
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -18,7 +19,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
-import kotlin.math.abs
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.max
 import kotlin.math.min
 
@@ -35,7 +38,7 @@ private object TileCache {
     @Synchronized fun get(key: TileKey): Bitmap? = cache[key]
 
     @Synchronized fun put(key: TileKey, bitmap: Bitmap) {
-        cache[key]?.recycle()
+        // Do not recycle bitmaps here: Compose may still be drawing an evicted tile.
         cache[key] = bitmap
     }
 }
@@ -55,6 +58,20 @@ fun TiledImage(
     var offsetX by remember(path) { mutableFloatStateOf(0f) }
     var offsetY by remember(path) { mutableFloatStateOf(0f) }
     var positionInitialized by remember(path) { mutableStateOf(false) }
+    val latestPositionCallback by rememberUpdatedState(onReadingPositionChanged)
+    LaunchedEffect(path) {
+        snapshotFlow { if (positionInitialized) offsetY else null }
+            .distinctUntilChanged()
+            .debounce(350)
+            .collectLatest { offset ->
+                if (offset != null && viewport.height > 0 && info != null) {
+                    val dimensions = info!!
+                    val fit = min(1f, viewport.width.toFloat() / dimensions.width)
+                    val extent = max(0f, (dimensions.height * fit * scale - viewport.height) / 2f)
+                    if (extent > 0f) latestPositionCallback(((-offset + extent) / (2f * extent)).coerceIn(0f, 1f))
+                }
+            }
+    }
     val loadedTiles = remember(path) { mutableStateMapOf<TileKey, Bitmap>() }
 
     LaunchedEffect(path) {
@@ -79,7 +96,7 @@ fun TiledImage(
         val maxPanY = max(0f, (contentHeight - viewport.height) / 2f)
         if (!positionInitialized) {
             LaunchedEffect(imageInfo, viewport) {
-                offsetY = -maxPanY * initialReadingPosition.coerceIn(0f, 1f)
+                offsetY = maxPanY * (1f - 2f * initialReadingPosition.coerceIn(0f, 1f))
                 positionInitialized = true
             }
         }
@@ -87,7 +104,7 @@ fun TiledImage(
         val y = (viewport.height - contentHeight) / 2f + offsetY.coerceIn(-maxPanY, maxPanY)
         val sample = remember(effectiveScale) {
             var value = 1
-            while (effectiveScale * value * 2f <= 1f) value *= 2
+            while (effectiveScale * value * 2f <= 1f && value < 64) value *= 2
             value
         }
         val sourceLeft = ((-x) / effectiveScale).coerceIn(0f, imageInfo.width.toFloat())
@@ -114,28 +131,29 @@ fun TiledImage(
                 missing.map { key -> async { key to decodeTile(key, imageInfo) } }.awaitAll()
             }
             decoded.forEach { (key, bitmap) ->
-                if (bitmap != null) {
+                if (bitmap != null && key in tileKeys) {
                     TileCache.put(key, bitmap)
                     loadedTiles[key] = bitmap
                 }
             }
             tileKeys.forEach { key -> TileCache.get(key)?.let { loadedTiles[key] = it } }
+            // Keep only visible tiles in Compose state; the shared LRU handles reuse.
+            loadedTiles.keys.toList().filter { it !in tileKeys }.forEach { loadedTiles.remove(it) }
         }
 
         Canvas(
-            Modifier
+            Modifier.fillMaxSize()
                 .pointerInput(path) {
                     detectTransformGestures { _, pan, zoom, _ ->
                         onInteraction()
-                        if (scale <= 1.01f && zoom == 1f && abs(pan.x) > abs(pan.y) && abs(pan.x) > 40f) {
-                            onHorizontalSwipe(pan.x < 0)
-                        } else {
-                            scale = (scale * zoom).coerceIn(1f, 5f)
-                            offsetX = (offsetX + pan.x).coerceIn(-maxPanX, maxPanX)
-                            offsetY = (offsetY + pan.y).coerceIn(-maxPanY, maxPanY)
-                            val position = if (maxPanY == 0f) 0f else (-offsetY + maxPanY) / (2f * maxPanY)
-                            onReadingPositionChanged(position.coerceIn(0f, 1f))
-                        }
+                        val newScale = (scale * zoom).coerceIn(1f, 5f)
+                        val newWidth = imageInfo.width * baseScale * newScale
+                        val newHeight = imageInfo.height * baseScale * newScale
+                        val newMaxX = max(0f, (newWidth - viewport.width) / 2f)
+                        val newMaxY = max(0f, (newHeight - viewport.height) / 2f)
+                        scale = newScale
+                        offsetX = (offsetX + pan.x).coerceIn(-newMaxX, newMaxX)
+                        offsetY = (offsetY + pan.y).coerceIn(-newMaxY, newMaxY)
                     }
                 }
         ) {
