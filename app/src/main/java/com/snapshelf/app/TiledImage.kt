@@ -46,6 +46,7 @@ fun TiledImage(
     initialReadingPosition: Float,
     onReadingPositionChanged: (Float) -> Unit,
     onHorizontalSwipe: (Boolean) -> Unit,
+    onInteraction: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var info by remember(path) { mutableStateOf<ImageInfo?>(null) }
@@ -69,10 +70,7 @@ fun TiledImage(
     ) {
         val imageInfo = info
         if (imageInfo == null || viewport.width == 0 || viewport.height == 0) return@BoxWithConstraints
-        val baseScale = min(
-            viewport.width.toFloat() / imageInfo.width,
-            viewport.height.toFloat() / imageInfo.height
-        )
+        val baseScale = min(1f, viewport.width.toFloat() / imageInfo.width)
         val effectiveScale = baseScale * scale
         val contentWidth = imageInfo.width * effectiveScale
         val contentHeight = imageInfo.height * effectiveScale
@@ -128,6 +126,7 @@ fun TiledImage(
             Modifier
                 .pointerInput(path) {
                     detectTransformGestures { _, pan, zoom, _ ->
+                        onInteraction()
                         if (scale <= 1.01f && zoom == 1f && abs(pan.x) > abs(pan.y) && abs(pan.x) > 40f) {
                             onHorizontalSwipe(pan.x < 0)
                         } else {

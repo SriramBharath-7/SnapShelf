@@ -16,7 +16,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.*
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -28,6 +27,10 @@ import androidx.compose.ui.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.awaitPointerEvent
+import androidx.compose.ui.input.pointer.awaitPointerEventScope
+import androidx.compose.ui.input.pointer.changedToDown
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -233,21 +236,30 @@ private fun ViewerScreen(vm: LibraryViewModel, id: String, back: () -> Unit, aut
     val image = collection.getOrNull(currentIndex)
     var tempPath by remember(image?.id) { mutableStateOf<String?>(null) }
     var showControls by remember(image?.id) { mutableStateOf(true) }
+    var interactionTick by remember(image?.id) { mutableIntStateOf(0) }
     LaunchedEffect(image?.id) {
         if (image?.isProtected == true) authenticate { tempPath = vm.decryptForViewing(image) }
     }
-    LaunchedEffect(image?.id, showControls) {
-        if (showControls) {
-            kotlinx.coroutines.delay(2400)
-            showControls = false
-        }
+    LaunchedEffect(image?.id, interactionTick) {
+        kotlinx.coroutines.delay(2400)
+        showControls = false
     }
     DisposableEffect(tempPath) { onDispose { tempPath?.let { File(it).delete() } } }
     Box(
         Modifier
             .fillMaxSize()
             .background(Black)
-            .pointerInput(image?.id) { detectTapGestures { showControls = !showControls } }
+            .pointerInput(image?.id) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        if (event.changes.any { it.changedToDown() }) {
+                            showControls = true
+                            interactionTick++
+                        }
+                    }
+                }
+            }
     ) {
         image?.let { current ->
             val path = tempPath ?: current.path.takeIf { !current.isProtected }
@@ -256,6 +268,10 @@ private fun ViewerScreen(vm: LibraryViewModel, id: String, back: () -> Unit, aut
                     path = it,
                     initialReadingPosition = current.readingPosition,
                     onReadingPositionChanged = { vm.savePosition(current.id, it) },
+                    onInteraction = {
+                        showControls = true
+                        interactionTick++
+                    },
                     onHorizontalSwipe = { forward ->
                         if (forward && currentIndex < collection.lastIndex) currentIndex++
                         if (!forward && currentIndex > 0) currentIndex--
