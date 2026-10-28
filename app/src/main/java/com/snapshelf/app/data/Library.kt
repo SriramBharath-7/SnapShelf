@@ -67,7 +67,7 @@ interface LibraryDao {
     @Query("DELETE FROM images WHERE id = :id") suspend fun deleteImage(id: String)
     @Query("UPDATE images SET readingPosition = :position WHERE id = :id") suspend fun updatePosition(id: String, position: Float)
     @Query("UPDATE images SET orderIndex = :orderIndex WHERE id = :id") suspend fun updateOrder(id: String, orderIndex: Int)
-    @Query("UPDATE images SET isProtected = :protected, path = :path WHERE id = :id") suspend fun updateProtection(id: String, protected: Boolean, path: String)
+    @Query("UPDATE images SET isProtected = :isProtected, path = :path WHERE id = :id") suspend fun updateProtection(id: String, isProtected: Boolean, path: String)
 }
 
 @Database(entities = [Subject::class, Folder::class, LibraryImage::class], version = 2, exportSchema = false)
