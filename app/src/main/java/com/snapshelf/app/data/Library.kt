@@ -3,6 +3,7 @@ package com.snapshelf.app.data
 import android.content.Context
 import android.net.Uri
 import androidx.room.*
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import java.io.File
