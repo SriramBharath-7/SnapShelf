@@ -111,9 +111,10 @@ class LibraryRepository(private val context: Context, private val dao: LibraryDa
     suspend fun renameImage(image: LibraryImage, name: String) = dao.renameImage(image.id, name.trim())
     suspend fun deleteSubject(subject: Subject) {
         val folderIds = dao.folders(subject.id).first()
+        val imagesByFolder = folderIds.associateWith { folder -> dao.imageList(folder.id) }
         dao.deleteSubject(subject.id)
         folderIds.forEach { folder ->
-            dao.imageList(folder.id).forEach { image -> deleteFiles(image) }
+            imagesByFolder[folder].orEmpty().forEach { image -> deleteFiles(image) }
             File(context.filesDir, "library/${folder.id}").deleteRecursively()
         }
     }
@@ -160,12 +161,17 @@ class LibraryRepository(private val context: Context, private val dao: LibraryDa
         val pending = mutableListOf<LibraryImage>()
         try {
             uris.distinct().forEachIndexed { index, uri ->
-            val name = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "Screenshot_${index + 1}.png"
-            val target = File(destination, "${UUID.randomUUID()}_${name.replace(Regex("[^A-Za-z0-9._-]"), "_")}")
+                val name = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "Screenshot_${index + 1}.png"
+                val target = File(destination, "${UUID.randomUUID()}_${name.replace(Regex("[^A-Za-z0-9._-]"), "_")}")
                 context.contentResolver.openInputStream(uri)?.use { input -> target.outputStream().use(input::copyTo) }
                     ?: error("Unable to read $name")
-                val thumbnail = createThumbnail(target, destination)
-                pending += LibraryImage(folderId = folder.id, path = target.absolutePath, thumbnailPath = thumbnail.absolutePath, displayName = name, orderIndex = existingCount + index)
+                try {
+                    val thumbnail = createThumbnail(target, destination)
+                    pending += LibraryImage(folderId = folder.id, path = target.absolutePath, thumbnailPath = thumbnail.absolutePath, displayName = name, orderIndex = existingCount + index)
+                } catch (error: Exception) {
+                    target.delete()
+                    throw error
+                }
             }
         } catch (error: Exception) {
             pending.forEach { deleteFiles(it) }
