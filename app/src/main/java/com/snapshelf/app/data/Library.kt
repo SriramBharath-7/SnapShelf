@@ -2,6 +2,7 @@ package com.snapshelf.app.data
 
 import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.room.*
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
@@ -156,12 +157,16 @@ class LibraryRepository(private val context: Context, private val dao: LibraryDa
     }
 
     suspend fun importImages(folder: Folder, uris: List<Uri>) {
-        val destination = File(context.filesDir, "library/${folder.id}").apply { mkdirs() }
+        val subjectName = dao.subject(folder.subjectId)?.name ?: folder.subjectId
+        val destination = File(
+            context.filesDir,
+            "library/subjects/${storageSegment(subjectName)}_${folder.subjectId}/units/${storageSegment(folder.name)}_${folder.id}/images"
+        ).apply { mkdirs() }
         val existingCount = dao.imageList(folder.id).size
         val pending = mutableListOf<LibraryImage>()
         try {
             uris.distinct().forEachIndexed { index, uri ->
-                val name = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "Screenshot_${index + 1}.png"
+                val name = displayName(uri) ?: "Screenshot_${index + 1}.png"
                 val target = File(destination, "${UUID.randomUUID()}_${name.replace(Regex("[^A-Za-z0-9._-]"), "_")}")
                 context.contentResolver.openInputStream(uri)?.use { input -> target.outputStream().use(input::copyTo) }
                     ?: error("Unable to read $name")
@@ -195,6 +200,20 @@ class LibraryRepository(private val context: Context, private val dao: LibraryDa
         File(image.path).delete()
         image.thumbnailPath?.let { File(it).delete() }
     }
+
+    private fun displayName(uri: Uri): String? {
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                cursor.getString(0)?.takeIf { it.isNotBlank() }?.let { return it }
+            }
+        }
+        return uri.lastPathSegment
+            ?.substringAfterLast('/')
+            ?.takeIf { it.isNotBlank() }
+    }
+
+    private fun storageSegment(value: String): String =
+        value.trim().replace(Regex("[^A-Za-z0-9._-]"), "_").take(80).ifBlank { "unnamed" }
 
     private fun createThumbnail(source: File, directory: File): File {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }

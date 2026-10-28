@@ -16,7 +16,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.*
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -26,9 +26,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -41,9 +39,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.navigation.compose.*
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
-import coil.request.CachePolicy
 import coil.size.Precision
-import coil.size.Size
 import com.snapshelf.app.data.*
 import kotlinx.coroutines.launch
 import java.io.File
@@ -117,6 +113,7 @@ class LibraryViewModel(val context: Context, private val repo: LibraryRepository
     fun deleteImage(i: LibraryImage) = viewModelScope.launch { repo.deleteImage(i) }
     fun importImages(f: Folder, uris: List<Uri>) = viewModelScope.launch { repo.importImages(f, uris) }
     fun reorder(folderId: String, ids: List<String>) = viewModelScope.launch { repo.reorder(folderId, ids) }
+    fun savePosition(id: String, position: Float) = viewModelScope.launch { repo.updatePosition(id, position) }
     fun protect(i: LibraryImage) = viewModelScope.launch { repo.protect(i) }
     fun decryptForViewing(i: LibraryImage) = repo.decryptForViewing(i)
     init { viewModelScope.launch { repo.reconcileStorage() } }
@@ -232,42 +229,48 @@ private fun ViewerScreen(vm: LibraryViewModel, id: String, back: () -> Unit, aut
         currentIndex = collection.indexOfFirst { it.id == id }.coerceAtLeast(0)
     }
     val image = collection.getOrNull(currentIndex)
-    var scale by remember { mutableFloatStateOf(1f) }
-    var offsetX by remember { mutableFloatStateOf(0f) }
-    var offsetY by remember { mutableFloatStateOf(0f) }
     var tempPath by remember(image?.id) { mutableStateOf<String?>(null) }
+    var showControls by remember(image?.id) { mutableStateOf(true) }
     LaunchedEffect(image?.id) {
-        scale = 1f
-        offsetX = 0f
-        offsetY = 0f
         if (image?.isProtected == true) authenticate { tempPath = vm.decryptForViewing(image) }
     }
-    DisposableEffect(tempPath) { onDispose { tempPath?.let { File(it).delete() } } }
-    Box(Modifier.fillMaxSize().background(Black)) {
-        image?.let { current ->
-            AsyncImage(
-                model = tempPath?.let { originalImageRequest(LocalContext.current, it) }
-                    ?: current.path.takeIf { !current.isProtected }?.let { originalImageRequest(LocalContext.current, it) },
-                contentDescription = current.displayName,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize().pointerInput(current.id) {
-                    detectTransformGestures { _, pan, zoom, _ ->
-                        if (scale <= 1.01f && zoom == 1f && kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y) && kotlin.math.abs(pan.x) > 40f) {
-                            if (pan.x < 0 && currentIndex < collection.lastIndex) currentIndex++ else if (pan.x > 0 && currentIndex > 0) currentIndex--
-                        } else {
-                            scale = (scale * zoom).coerceIn(1f, 5f)
-                            offsetX += pan.x
-                            offsetY += pan.y
-                        }
-                    }
-                }.graphicsLayer(scaleX = scale, scaleY = scale, translationX = offsetX, translationY = offsetY)
-            )
+    LaunchedEffect(image?.id, showControls) {
+        if (showControls) {
+            kotlinx.coroutines.delay(2400)
+            showControls = false
         }
-        ViewerTopBar(back, image?.displayName ?: "Screenshot", if (collection.isNotEmpty()) "${currentIndex + 1} / ${collection.size}" else "")
-        if (collection.isNotEmpty()) {
-            Row(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                ViewerButton("‹", currentIndex > 0) { currentIndex-- }
-                ViewerButton("›", currentIndex < collection.lastIndex) { currentIndex++ }
+    }
+    DisposableEffect(tempPath) { onDispose { tempPath?.let { File(it).delete() } } }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Black)
+            .pointerInput(image?.id) { detectTapGestures { showControls = !showControls } }
+    ) {
+        image?.let { current ->
+            val path = tempPath ?: current.path.takeIf { !current.isProtected }
+            path?.let {
+                TiledImage(
+                    path = it,
+                    initialReadingPosition = current.readingPosition,
+                    onReadingPositionChanged = { vm.savePosition(current.id, it) },
+                    onHorizontalSwipe = { forward ->
+                        if (forward && currentIndex < collection.lastIndex) currentIndex++
+                        if (!forward && currentIndex > 0) currentIndex--
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+        AnimatedVisibility(showControls) {
+            ViewerTopBar(back, image?.displayName ?: "Screenshot", if (collection.isNotEmpty()) "${currentIndex + 1} / ${collection.size}" else "")
+        }
+        AnimatedVisibility(showControls, modifier = Modifier.align(Alignment.BottomCenter)) {
+            if (collection.isNotEmpty()) {
+                Row(Modifier.navigationBarsPadding().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ViewerButton("‹", currentIndex > 0) { currentIndex-- }
+                    ViewerButton("›", currentIndex < collection.lastIndex) { currentIndex++ }
+                }
             }
         }
     }
@@ -497,15 +500,4 @@ private fun thumbnailImageRequest(context: Context, path: String) = ImageRequest
     .memoryCacheKey("thumbnail:$path")
     .diskCacheKey("thumbnail:$path")
     .crossfade(180)
-    .build()
-
-private fun originalImageRequest(context: Context, path: String) = ImageRequest.Builder(context)
-    .data(path)
-    .size(Size.ORIGINAL)
-    .precision(Precision.EXACT)
-    .allowHardware(false)
-    .memoryCachePolicy(CachePolicy.DISABLED)
-    .diskCachePolicy(CachePolicy.DISABLED)
-    .memoryCacheKey("original:$path")
-    .diskCacheKey("original:$path")
     .build()

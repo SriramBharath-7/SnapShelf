@@ -25,13 +25,13 @@ The artifact is retained for 30 days. A workflow run must finish successfully be
 
 ## Current scope
 
-The project includes subject and unit creation, multi-image importing, persistent Room metadata, app-private image copies, rename/delete confirmation flows, persistent move-up screenshot ordering, collection-aware previous/next navigation, zoom/pan gestures, and a dark Compose UI.
+The project includes subject and unit creation, multi-image importing, persistent Room metadata, app-private image copies, rename/delete confirmation flows, persistent move-up screenshot ordering, collection-aware previous/next navigation, zoom/pan gestures, and a dark Compose UI. Imported originals are copied byte-for-byte into subject/unit-owned app storage; the original document display name is stored separately from the internal UUID filename. Library cards use bounded thumbnails, while the reader decodes only visible regions of large images and retains saved reading positions.
 
 Protected screenshots are encrypted with AES-GCM using an Android Keystore key and require `BiometricPrompt` authentication (biometric or device credential) before entering the vault or decrypting a viewer image. Decrypted viewer files are placed under an app-private temporary directory and removed when that viewer leaves composition. App lock can be enabled in Settings and requests authentication when the app returns from the background.
 
 ## Important limitations
 
 - The project includes a Gradle 8.9 wrapper for Android Studio and GitHub Actions. This environment still cannot execute it because Gradle and the Android SDK are not installed locally.
-- A device/emulator test is still required for biometric fallback, gestures on very tall images, image decoding limits, and Photo Picker behavior.
-- The viewer currently provides button and swipe navigation, but does not yet include a thumbnail strip or fit-to-width toggle.
+- A device/emulator test is still required for biometric fallback, frame delivery on representative very tall images, image decoding limits, and Photo Picker behavior.
+- Reader controls hide after a short idle period and reappear on tap; the viewer provides button and swipe navigation, but does not include a thumbnail strip or fit-to-width toggle.
 - Import failures are surfaced to the coroutine log but do not yet have a dedicated in-app error banner.
